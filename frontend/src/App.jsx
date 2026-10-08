@@ -9,7 +9,6 @@ import {
   XCircle,
   Clock,
   PlusCircle,
-  ArrowUpRight,
   Sparkles,
   Search,
   ExternalLink,
@@ -21,7 +20,10 @@ import {
   X,
   FastForward,
   Copy,
-  ChevronDown
+  UserPlus,
+  Trash2,
+  Rocket,
+  Crown
 } from 'lucide-react';
 import { CONTRACT_ADDRESSES, SUPPORTED_NETWORKS } from './contracts/config';
 import contractArtifact from './contracts/ClubTreasuryDAO.json';
@@ -32,27 +34,29 @@ export default function App() {
   // Mode: 'web3' or 'demo'
   const [isDemoMode, setIsDemoMode] = useState(false);
 
-  // Web3 State
+  // Web3 & Wallet State (Real connected wallet)
   const [account, setAccount] = useState('');
   const [chainId, setChainId] = useState(null);
   const [accountBalance, setAccountBalance] = useState('0.00');
   const [isMember, setIsMember] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminAddress, setAdminAddress] = useState('');
   const [contractAddress, setContractAddress] = useState(CONTRACT_ADDRESSES.sepolia);
+  const [isContractDeployed, setIsContractDeployed] = useState(false);
 
   // Club / Treasury State
   const [clubName, setClubName] = useState('Campus Web3 Innovation Club');
   const [clubDescription, setClubDescription] = useState(
     'Decentralized autonomous treasury for campus projects, hackathons, and research equipment.'
   );
-  const [treasuryBalance, setTreasuryBalance] = useState('5.00');
+  const [treasuryBalance, setTreasuryBalance] = useState('0.00');
   const [quorumPct, setQuorumPct] = useState(30);
   const [members, setMembers] = useState([]);
   const [proposals, setProposals] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
   // Filters & Search
-  const [statusFilter, setStatusFilter] = useState('all'); // all, active, passed, executed, rejected
+  const [statusFilter, setStatusFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentTime, setCurrentTime] = useState(Math.floor(Date.now() / 1000));
 
@@ -61,18 +65,25 @@ export default function App() {
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showMembersModal, setShowMembersModal] = useState(false);
   const [showGuideModal, setShowGuideModal] = useState(false);
+  const [showDeployModal, setShowDeployModal] = useState(false);
 
-  // Form States
+  // Forms
   const [proposalForm, setProposalForm] = useState({
     title: '',
     description: '',
     amount: '',
-    durationSeconds: 120, // default 2 minutes for easy testing
+    durationSeconds: 120, // 2 mins for quick testing
   });
-  const [depositAmount, setDepositAmount] = useState('0.5');
+  const [depositAmount, setDepositAmount] = useState('0.1');
   const [newMemberAddress, setNewMemberAddress] = useState('');
+  const [deployForm, setDeployForm] = useState({
+    clubName: 'Campus Web3 Innovation Club',
+    clubDescription: 'Autonomous student DAO treasury for hackathons and projects.',
+    quorumPct: 30,
+    initialFunding: '0.01',
+  });
 
-  // Toast System
+  // Toasts
   const [toasts, setToasts] = useState([]);
 
   const addToast = (type, title, message) => {
@@ -83,7 +94,7 @@ export default function App() {
     }, 6000);
   };
 
-  // Clock ticker for active countdowns
+  // Live timer for proposal deadlines
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(Math.floor(Date.now() / 1000));
@@ -91,67 +102,55 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Initialize Demo Mode
-  const loadDemoData = () => {
-    setClubName(INITIAL_DEMO_STATE.clubName);
-    setClubDescription(INITIAL_DEMO_STATE.clubDescription);
-    setTreasuryBalance(INITIAL_DEMO_STATE.treasuryBalance);
-    setQuorumPct(INITIAL_DEMO_STATE.quorumPercentage);
-    setAccount(INITIAL_DEMO_STATE.currentUser.address);
-    setAccountBalance(INITIAL_DEMO_STATE.currentUser.balance);
-    setIsMember(true);
-    setIsAdmin(true);
-    setMembers(INITIAL_DEMO_STATE.members);
-    setProposals(INITIAL_DEMO_STATE.proposals);
-  };
-
-  // Switch between Live Web3 & Demo Simulator
+  // Check connected wallet on mount
   useEffect(() => {
-    if (isDemoMode) {
-      loadDemoData();
-      addToast('info', 'Demo Simulator Active', 'Interactive test mode enabled. Test all functions with simulated state.');
-    } else {
-      checkConnectedWallet();
-    }
-  }, [isDemoMode]);
+    checkConnectedWallet();
+  }, []);
 
-  // Check connected wallet on load
+  // Check connected wallet
   const checkConnectedWallet = async () => {
     if (typeof window.ethereum !== 'undefined') {
       try {
         const provider = new ethers.BrowserProvider(window.ethereum);
         const accounts = await provider.listAccounts();
         const network = await provider.getNetwork();
-        setChainId(Number(network.chainId));
+        const cId = Number(network.chainId);
+        setChainId(cId);
 
         if (accounts.length > 0) {
           const userAddr = accounts[0].address;
           setAccount(userAddr);
           const bal = await provider.getBalance(userAddr);
           setAccountBalance(parseFloat(ethers.formatEther(bal)).toFixed(4));
-          await loadContractData(provider, userAddr, Number(network.chainId));
+          setIsDemoMode(false);
+          await loadAppState(provider, userAddr, cId);
         } else {
-          // If not connected, default to demo mode so user sees rich UI right away!
-          setIsDemoMode(true);
+          // No wallet connected yet
+          setAccount('');
         }
       } catch (err) {
         console.error('Wallet check failed:', err);
-        setIsDemoMode(true);
       }
-    } else {
-      setIsDemoMode(true);
     }
   };
 
-  // Listen for Ethereum events
+  // Listen for MetaMask account and chain changes
   useEffect(() => {
-    if (typeof window.ethereum !== 'undefined' && !isDemoMode) {
-      const handleAccountsChanged = (accs) => {
+    if (typeof window.ethereum !== 'undefined') {
+      const handleAccountsChanged = async (accs) => {
         if (accs.length > 0) {
-          setAccount(accs[0]);
-          checkConnectedWallet();
+          const newAddr = accs[0];
+          setAccount(newAddr);
+          const provider = new ethers.BrowserProvider(window.ethereum);
+          const bal = await provider.getBalance(newAddr);
+          setAccountBalance(parseFloat(ethers.formatEther(bal)).toFixed(4));
+          if (chainId) {
+            await loadAppState(provider, newAddr, chainId);
+          }
+          addToast('info', 'Account Switched', `Active: ${newAddr.slice(0, 6)}...${newAddr.slice(-4)}`);
         } else {
           setAccount('');
+          setIsAdmin(false);
           setIsMember(false);
         }
       };
@@ -168,12 +167,12 @@ export default function App() {
         window.ethereum.removeListener('chainChanged', handleChainChanged);
       };
     }
-  }, [isDemoMode]);
+  }, [chainId, adminAddress]);
 
   // Connect Wallet
   const connectWallet = async () => {
     if (typeof window.ethereum === 'undefined') {
-      addToast('error', 'MetaMask Not Detected', 'Please install MetaMask or switch to Demo Simulator Mode to test.');
+      addToast('error', 'MetaMask Required', 'Please install MetaMask extension to connect your wallet.');
       return;
     }
     try {
@@ -182,14 +181,16 @@ export default function App() {
       const accounts = await provider.send('eth_requestAccounts', []);
       const userAddr = accounts[0];
       setAccount(userAddr);
+
       const network = await provider.getNetwork();
-      setChainId(Number(network.chainId));
+      const cId = Number(network.chainId);
+      setChainId(cId);
 
       const bal = await provider.getBalance(userAddr);
       setAccountBalance(parseFloat(ethers.formatEther(bal)).toFixed(4));
 
       setIsDemoMode(false);
-      await loadContractData(provider, userAddr, Number(network.chainId));
+      await loadAppState(provider, userAddr, cId);
       addToast('success', 'Wallet Connected', `Connected: ${userAddr.slice(0, 6)}...${userAddr.slice(-4)}`);
     } catch (err) {
       console.error(err);
@@ -199,75 +200,131 @@ export default function App() {
     }
   };
 
-  // Load On-Chain Data
-  const loadContractData = async (provider, userAddr, networkChainId) => {
+  // Load App State for connected wallet
+  const loadAppState = async (provider, userAddr, networkChainId) => {
     try {
-      let targetAddress = contractAddress;
-      if (networkChainId === 11155111) targetAddress = CONTRACT_ADDRESSES.sepolia;
-      else if (networkChainId === 31337) targetAddress = CONTRACT_ADDRESSES.localhost;
+      // Determine contract address for network
+      let targetAddress = localStorage.getItem(`dao_contract_${networkChainId}`) || CONTRACT_ADDRESSES.sepolia;
+      if (networkChainId === 31337) targetAddress = CONTRACT_ADDRESSES.localhost;
       else if (networkChainId === 80002) targetAddress = CONTRACT_ADDRESSES.amoy;
       setContractAddress(targetAddress);
 
-      const contract = new ethers.Contract(targetAddress, contractArtifact.abi, provider);
-
-      // Verify contract deployment
-      const code = await provider.getCode(targetAddress);
-      if (code === '0x' || code === '') {
-        console.warn('Contract not found at address on current network, loading demo view');
-        loadDemoData();
-        return;
+      // Check if contract has bytecode deployed at this address
+      let code = '0x';
+      try {
+        code = await provider.getCode(targetAddress);
+      } catch (e) {
+        code = '0x';
       }
 
-      const [name, desc, adminAddr, stats, memberList, rawProposals] = await Promise.all([
-        contract.clubName().catch(() => 'Campus DAO Club'),
-        contract.clubDescription().catch(() => 'Club Treasury'),
-        contract.admin().catch(() => ethers.ZeroAddress),
-        contract.getClubStats().catch(() => [0n, 0n, 0n, 30n, 0n]),
-        contract.getMemberList().catch(() => []),
-        contract.getAllProposals().catch(() => []),
-      ]);
+      if (code && code !== '0x' && code !== '') {
+        // Contract is deployed live on-chain!
+        setIsContractDeployed(true);
+        const contract = new ethers.Contract(targetAddress, contractArtifact.abi, provider);
 
-      setClubName(name);
-      setClubDescription(desc);
-      setTreasuryBalance(parseFloat(ethers.formatEther(stats[0])).toFixed(4));
-      setQuorumPct(Number(stats[3]));
-      setMembers(memberList);
+        const [name, desc, onChainAdmin, stats, memberList, rawProposals] = await Promise.all([
+          contract.clubName().catch(() => 'Campus DAO Club'),
+          contract.clubDescription().catch(() => 'Club Treasury'),
+          contract.admin().catch(() => ethers.ZeroAddress),
+          contract.getClubStats().catch(() => [0n, 0n, 0n, 30n, 0n]),
+          contract.getMemberList().catch(() => []),
+          contract.getAllProposals().catch(() => []),
+        ]);
 
-      const isMem = await contract.isMember(userAddr).catch(() => false);
-      setIsMember(isMem);
-      setIsAdmin(adminAddr.toLowerCase() === userAddr.toLowerCase());
+        setClubName(name);
+        setClubDescription(desc);
+        setTreasuryBalance(parseFloat(ethers.formatEther(stats[0])).toFixed(4));
+        setQuorumPct(Number(stats[3]));
+        setMembers(memberList);
+        setAdminAddress(onChainAdmin);
 
-      // Format proposals
-      const formatted = await Promise.all(
-        rawProposals.map(async (p) => {
-          let userVotedChoice = 0;
-          if (userAddr) {
-            const voterInfo = await contract.getVoterInfo(p.id, userAddr).catch(() => [false, 0]);
-            userVotedChoice = Number(voterInfo[1]);
-          }
+        const userIsAdmin = onChainAdmin.toLowerCase() === userAddr.toLowerCase();
+        setIsAdmin(userIsAdmin);
 
-          return {
-            id: Number(p.id),
-            title: p.title,
-            description: p.description,
-            amount: ethers.formatEther(p.amount),
-            recipient: p.recipient,
-            proposer: p.proposer,
-            createdAt: Number(p.createdAt),
-            votingDeadline: Number(p.votingDeadline),
-            votesFor: Number(p.votesFor),
-            votesAgainst: Number(p.votesAgainst),
-            totalVotes: Number(p.totalVotes),
-            executed: p.executed,
-            userVoted: userVotedChoice,
-          };
-        })
-      );
+        const isMem = await contract.isMember(userAddr).catch(() => false);
+        setIsMember(isMem || userIsAdmin);
 
-      setProposals(formatted);
+        const formatted = await Promise.all(
+          rawProposals.map(async (p) => {
+            let userVotedChoice = 0;
+            if (userAddr) {
+              const voterInfo = await contract.getVoterInfo(p.id, userAddr).catch(() => [false, 0]);
+              userVotedChoice = Number(voterInfo[1]);
+            }
+            return {
+              id: Number(p.id),
+              title: p.title,
+              description: p.description,
+              amount: ethers.formatEther(p.amount),
+              recipient: p.recipient,
+              proposer: p.proposer,
+              createdAt: Number(p.createdAt),
+              votingDeadline: Number(p.votingDeadline),
+              votesFor: Number(p.votesFor),
+              votesAgainst: Number(p.votesAgainst),
+              totalVotes: Number(p.totalVotes),
+              executed: p.executed,
+              userVoted: userVotedChoice,
+            };
+          })
+        );
+        setProposals(formatted);
+      } else {
+        // Contract not yet deployed on this network
+        setIsContractDeployed(false);
+
+        // Core Requirement: First connected wallet becomes the ADMIN!
+        let storedAdmin = localStorage.getItem('dao_first_admin');
+        if (!storedAdmin) {
+          storedAdmin = userAddr;
+          localStorage.setItem('dao_first_admin', userAddr);
+        }
+        setAdminAddress(storedAdmin);
+
+        const userIsAdmin = storedAdmin.toLowerCase() === userAddr.toLowerCase();
+        setIsAdmin(userIsAdmin);
+        setIsMember(true); // Admin is automatically a member
+
+        // Core Requirement: Start with ONLY the Admin and NO pre-filled members!
+        const savedMembers = JSON.parse(localStorage.getItem('dao_user_members') || '[]');
+        if (savedMembers.length > 0) {
+          setMembers(savedMembers);
+        } else {
+          // Initialize with ONLY the admin
+          const initialMembers = [storedAdmin];
+          setMembers(initialMembers);
+          localStorage.setItem('dao_user_members', JSON.stringify(initialMembers));
+        }
+
+        // Load custom user proposals
+        const savedProposals = JSON.parse(localStorage.getItem('dao_user_proposals') || '[]');
+        setProposals(savedProposals);
+
+        // Load saved treasury balance
+        const savedBalance = localStorage.getItem('dao_user_treasury') || '0.50';
+        setTreasuryBalance(savedBalance);
+      }
     } catch (err) {
-      console.error('Error fetching on-chain data:', err);
-      loadDemoData();
+      console.error('Error in loadAppState:', err);
+    }
+  };
+
+  // Toggle Simulator Demo
+  const toggleDemoMode = () => {
+    if (!isDemoMode) {
+      setIsDemoMode(true);
+      setClubName(INITIAL_DEMO_STATE.clubName);
+      setClubDescription(INITIAL_DEMO_STATE.clubDescription);
+      setTreasuryBalance(INITIAL_DEMO_STATE.treasuryBalance);
+      setQuorumPct(INITIAL_DEMO_STATE.quorumPercentage);
+      setMembers(INITIAL_DEMO_STATE.members);
+      setProposals(INITIAL_DEMO_STATE.proposals);
+      setIsAdmin(true);
+      setIsMember(true);
+      addToast('info', 'Simulator Demo Active', 'Simulated demo state loaded for review and demonstration.');
+    } else {
+      setIsDemoMode(false);
+      checkConnectedWallet();
     }
   };
 
@@ -289,35 +346,113 @@ export default function App() {
     return 'Rejected';
   };
 
-  // Action: Join Club
-  const handleJoinClub = async () => {
-    if (isDemoMode) {
-      if (members.includes(account)) {
-        addToast('info', 'Already a Member', 'You are already registered in the club.');
-        return;
-      }
-      setMembers((prev) => [...prev, account]);
-      setIsMember(true);
-      addToast('success', 'Welcome to the Club!', 'You are now a registered DAO member with 1-member-1-vote rights.');
+  // Action: Add Member (ADMIN ONLY)
+  const handleAddMember = async (e) => {
+    e.preventDefault();
+    if (!isAdmin) {
+      addToast('error', 'Admin Only', 'Only the Club Admin can add new members.');
+      return;
+    }
+    if (!newMemberAddress || !ethers.isAddress(newMemberAddress.trim())) {
+      addToast('error', 'Invalid Address', 'Please provide a valid Ethereum wallet address (0x...).');
       return;
     }
 
+    const addrToAdd = ethers.getAddress(newMemberAddress.trim());
+
+    if (members.some((m) => m.toLowerCase() === addrToAdd.toLowerCase())) {
+      addToast('info', 'Already a Member', 'This address is already registered in the club directory.');
+      return;
+    }
+
+    if (isContractDeployed && !isDemoMode) {
+      try {
+        setIsLoading(true);
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
+
+        addToast('loading', 'Transaction Submitted', 'Adding member to on-chain smart contract...');
+        const tx = await contract.addMember(addrToAdd);
+        await tx.wait();
+
+        setNewMemberAddress('');
+        await loadAppState(provider, account, chainId);
+        addToast('success', 'Member Added On-Chain', `${addrToAdd.slice(0, 6)}...${addrToAdd.slice(-4)} granted voting rights!`);
+      } catch (err) {
+        console.error(err);
+        addToast('error', 'Failed to Add Member', err.reason || err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
+      // Local / Offline mode
+      const updatedMembers = [...members, addrToAdd];
+      setMembers(updatedMembers);
+      localStorage.setItem('dao_user_members', JSON.stringify(updatedMembers));
+      setNewMemberAddress('');
+      addToast('success', 'Member Added', `${addrToAdd.slice(0, 6)}...${addrToAdd.slice(-4)} granted 1-member-1-vote rights!`);
+    }
+  };
+
+  // Action: Remove Member (ADMIN ONLY)
+  const handleRemoveMember = (addrToRemove) => {
+    if (!isAdmin) return;
+    if (addrToRemove.toLowerCase() === adminAddress.toLowerCase()) {
+      addToast('error', 'Cannot Remove Admin', 'The admin cannot remove themselves.');
+      return;
+    }
+    const updated = members.filter((m) => m.toLowerCase() !== addrToRemove.toLowerCase());
+    setMembers(updated);
+    localStorage.setItem('dao_user_members', JSON.stringify(updated));
+    addToast('info', 'Member Removed', `Removed ${addrToRemove.slice(0, 6)}...`);
+  };
+
+  // Action: Deploy Smart Contract to Sepolia / Localhost
+  const handleDeployContract = async (e) => {
+    e.preventDefault();
+    if (!account) {
+      addToast('error', 'Connect Wallet', 'Please connect MetaMask first to deploy the contract.');
+      return;
+    }
     try {
       setIsLoading(true);
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
-      const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
 
-      addToast('loading', 'Transaction Submitted', 'Joining club on-chain...');
-      const tx = await contract.joinClub();
-      await tx.wait();
+      addToast('loading', 'Deploying Contract', 'Please confirm the deployment transaction in MetaMask...');
 
-      setIsMember(true);
-      await loadContractData(provider, account, chainId);
-      addToast('success', 'Joined Club', 'You are now an on-chain DAO member!');
+      const factory = new ethers.ContractFactory(
+        contractArtifact.abi,
+        contractArtifact.bytecode,
+        signer
+      );
+
+      const parsedFunding = ethers.parseEther(deployForm.initialFunding || '0.01');
+      const deployedContract = await factory.deploy(
+        deployForm.clubName,
+        deployForm.clubDescription,
+        deployForm.quorumPct,
+        { value: parsedFunding }
+      );
+
+      addToast('loading', 'Mining Transaction', 'Waiting for contract deployment to be mined on-chain...');
+      await deployedContract.waitForDeployment();
+      const newAddress = await deployedContract.getAddress();
+
+      setContractAddress(newAddress);
+      localStorage.setItem(`dao_contract_${chainId}`, newAddress);
+      localStorage.setItem('dao_first_admin', account);
+      setIsContractDeployed(true);
+      setShowDeployModal(false);
+
+      fireSuccessConfetti();
+      addToast('success', 'Contract Deployed!', `Contract live at: ${newAddress.slice(0, 8)}... (You are on-chain Admin)`);
+
+      await loadAppState(provider, account, chainId);
     } catch (err) {
       console.error(err);
-      addToast('error', 'Join Failed', err.reason || err.message);
+      addToast('error', 'Deployment Failed', err.reason || err.message);
     } finally {
       setIsLoading(false);
     }
@@ -331,36 +466,36 @@ export default function App() {
       return;
     }
 
-    if (isDemoMode) {
+    if (isContractDeployed && !isDemoMode) {
+      try {
+        setIsLoading(true);
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
+
+        const parsedWei = ethers.parseEther(depositAmount.toString());
+        addToast('loading', 'Funding Treasury', 'Sending deposit transaction to smart contract...');
+        const tx = await contract.deposit({ value: parsedWei });
+        await tx.wait();
+
+        setShowDepositModal(false);
+        await loadAppState(provider, account, chainId);
+        addToast('success', 'Deposit Confirmed', `Sent ${depositAmount} ETH to Treasury!`);
+        fireSuccessConfetti();
+      } catch (err) {
+        console.error(err);
+        addToast('error', 'Deposit Failed', err.reason || err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
       const added = parseFloat(depositAmount);
-      setTreasuryBalance((prev) => (parseFloat(prev) + added).toFixed(2));
-      setAccountBalance((prev) => Math.max(0, parseFloat(prev) - added).toFixed(2));
+      const newBal = (parseFloat(treasuryBalance) + added).toFixed(2);
+      setTreasuryBalance(newBal);
+      localStorage.setItem('dao_user_treasury', newBal);
       setShowDepositModal(false);
-      addToast('success', 'Funds Deposited', `Successfully deposited ${depositAmount} ETH to treasury!`);
+      addToast('success', 'Funds Deposited', `Successfully funded ${depositAmount} ETH into the Treasury!`);
       fireSuccessConfetti();
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
-
-      const parsedWei = ethers.parseEther(depositAmount.toString());
-      addToast('loading', 'Funding Treasury', 'Sending deposit transaction...');
-      const tx = await contract.deposit({ value: parsedWei });
-      await tx.wait();
-
-      setShowDepositModal(false);
-      await loadContractData(provider, account, chainId);
-      addToast('success', 'Deposit Confirmed', `Sent ${depositAmount} ETH to Treasury!`);
-      fireSuccessConfetti();
-    } catch (err) {
-      console.error(err);
-      addToast('error', 'Deposit Failed', err.reason || err.message);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -368,15 +503,15 @@ export default function App() {
   const handleCreateProposal = async (e) => {
     e.preventDefault();
     if (!isMember) {
-      addToast('error', 'Action Restricted', 'Only registered club members can submit proposals.');
+      addToast('error', 'Restricted', 'Only registered members can submit proposals.');
       return;
     }
     if (!proposalForm.title.trim()) {
-      addToast('error', 'Missing Title', 'Please specify a title for the proposal.');
+      addToast('error', 'Missing Title', 'Please specify a title.');
       return;
     }
     if (!proposalForm.description.trim()) {
-      addToast('error', 'Missing Purpose', 'Please describe the purpose and fund usage.');
+      addToast('error', 'Missing Purpose', 'Please specify the proposal purpose.');
       return;
     }
     const reqAmount = parseFloat(proposalForm.amount);
@@ -385,11 +520,39 @@ export default function App() {
       return;
     }
     if (reqAmount > parseFloat(treasuryBalance)) {
-      addToast('error', 'Treasury Exceeded', 'Requested amount cannot exceed current treasury balance.');
+      addToast('error', 'Exceeds Treasury', `Requested amount (${reqAmount} ETH) cannot exceed Treasury Balance (${treasuryBalance} ETH).`);
       return;
     }
 
-    if (isDemoMode) {
+    if (isContractDeployed && !isDemoMode) {
+      try {
+        setIsLoading(true);
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
+
+        const parsedWei = ethers.parseEther(proposalForm.amount.toString());
+        addToast('loading', 'Creating Proposal', 'Broadcasting proposal to blockchain...');
+
+        const tx = await contract.createProposal(
+          proposalForm.title,
+          proposalForm.description,
+          parsedWei,
+          BigInt(proposalForm.durationSeconds)
+        );
+        await tx.wait();
+
+        setShowCreateModal(false);
+        setProposalForm({ title: '', description: '', amount: '', durationSeconds: 120 });
+        await loadAppState(provider, account, chainId);
+        addToast('success', 'Proposal Live', 'Proposal registered on-chain!');
+      } catch (err) {
+        console.error(err);
+        addToast('error', 'Creation Failed', err.reason || err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
       const newId = proposals.length;
       const durationSecs = Number(proposalForm.durationSeconds);
       const newProp = {
@@ -407,39 +570,12 @@ export default function App() {
         userVoted: 0,
         executed: false,
       };
-      setProposals([newProp, ...proposals]);
+      const updated = [newProp, ...proposals];
+      setProposals(updated);
+      localStorage.setItem('dao_user_proposals', JSON.stringify(updated));
       setShowCreateModal(false);
       setProposalForm({ title: '', description: '', amount: '', durationSeconds: 120 });
-      addToast('success', 'Proposal Created', 'Proposal is now active for club member voting!');
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
-
-      const parsedWei = ethers.parseEther(proposalForm.amount.toString());
-      addToast('loading', 'Creating Proposal', 'Broadcasting proposal to the blockchain...');
-
-      const tx = await contract.createProposal(
-        proposalForm.title,
-        proposalForm.description,
-        parsedWei,
-        BigInt(proposalForm.durationSeconds)
-      );
-      await tx.wait();
-
-      setShowCreateModal(false);
-      setProposalForm({ title: '', description: '', amount: '', durationSeconds: 120 });
-      await loadContractData(provider, account, chainId);
-      addToast('success', 'Proposal Live', 'Proposal registered on-chain!');
-    } catch (err) {
-      console.error(err);
-      addToast('error', 'Creation Failed', err.reason || err.message);
-    } finally {
-      setIsLoading(false);
+      addToast('success', 'Proposal Created', 'Proposal is now active for member voting!');
     }
   };
 
@@ -454,46 +590,45 @@ export default function App() {
     if (!targetProp) return;
 
     if (targetProp.proposer.toLowerCase() === account.toLowerCase()) {
-      addToast('error', 'Fairness Rule', 'Proposers may not vote on their own proposal.');
+      addToast('error', 'Fairness Rule', 'Proposers cannot vote on their own proposal.');
       return;
     }
 
-    if (isDemoMode) {
-      setProposals((prev) =>
-        prev.map((p) => {
-          if (p.id === proposalId) {
-            return {
-              ...p,
-              votesFor: support ? p.votesFor + 1 : p.votesFor,
-              votesAgainst: !support ? p.votesAgainst + 1 : p.votesAgainst,
-              totalVotes: p.totalVotes + 1,
-              userVoted: support ? 1 : 2,
-            };
-          }
-          return p;
-        })
-      );
+    if (isContractDeployed && !isDemoMode) {
+      try {
+        setIsLoading(true);
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
+
+        addToast('loading', 'Submitting Vote', `Voting ${support ? 'FOR' : 'AGAINST'}...`);
+        const tx = await contract.vote(proposalId, support);
+        await tx.wait();
+
+        await loadAppState(provider, account, chainId);
+        addToast('success', 'Vote Confirmed', `Your vote has been mined on-chain!`);
+      } catch (err) {
+        console.error(err);
+        addToast('error', 'Voting Failed', err.reason || err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
+      const updated = proposals.map((p) => {
+        if (p.id === proposalId) {
+          return {
+            ...p,
+            votesFor: support ? p.votesFor + 1 : p.votesFor,
+            votesAgainst: !support ? p.votesAgainst + 1 : p.votesAgainst,
+            totalVotes: p.totalVotes + 1,
+            userVoted: support ? 1 : 2,
+          };
+        }
+        return p;
+      });
+      setProposals(updated);
+      localStorage.setItem('dao_user_proposals', JSON.stringify(updated));
       addToast('success', 'Vote Recorded', `You voted ${support ? 'FOR' : 'AGAINST'} this proposal.`);
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
-
-      addToast('loading', 'Submitting Vote', `Voting ${support ? 'FOR' : 'AGAINST'}...`);
-      const tx = await contract.vote(proposalId, support);
-      await tx.wait();
-
-      await loadContractData(provider, account, chainId);
-      addToast('success', 'Vote Confirmed', `Your vote (${support ? 'FOR' : 'AGAINST'}) has been mined!`);
-    } catch (err) {
-      console.error(err);
-      addToast('error', 'Voting Failed', err.reason || err.message);
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -502,106 +637,91 @@ export default function App() {
     const targetProp = proposals.find((p) => p.id === proposalId);
     if (!targetProp) return;
 
-    if (isDemoMode) {
+    if (isContractDeployed && !isDemoMode) {
+      try {
+        setIsLoading(true);
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
+
+        addToast('loading', 'Executing Payout', 'Verifying quorum and executing fund transfer...');
+        const tx = await contract.executeProposal(proposalId);
+        await tx.wait();
+
+        fireSuccessConfetti();
+        await loadAppState(provider, account, chainId);
+        addToast('success', 'Funds Released!', `Proposal #${proposalId} finalized and ${targetProp.amount} ETH transferred!`);
+      } catch (err) {
+        console.error(err);
+        addToast('error', 'Execution Failed', err.reason || err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
       const payout = parseFloat(targetProp.amount);
       if (payout > parseFloat(treasuryBalance)) {
-        addToast('error', 'Insufficient Treasury Balance', 'Cannot execute: Treasury funds are below requested amount.');
+        addToast('error', 'Insufficient Treasury', 'Cannot execute: Treasury funds are below requested amount.');
         return;
       }
+      const updated = proposals.map((p) => (p.id === proposalId ? { ...p, executed: true } : p));
+      setProposals(updated);
+      localStorage.setItem('dao_user_proposals', JSON.stringify(updated));
 
-      setProposals((prev) =>
-        prev.map((p) => (p.id === proposalId ? { ...p, executed: true } : p))
-      );
-      setTreasuryBalance((prev) => Math.max(0, parseFloat(prev) - payout).toFixed(2));
-
-      if (targetProp.recipient.toLowerCase() === account.toLowerCase()) {
-        setAccountBalance((prev) => (parseFloat(prev) + payout).toFixed(2));
-      }
+      const newBal = Math.max(0, parseFloat(treasuryBalance) - payout).toFixed(2);
+      setTreasuryBalance(newBal);
+      localStorage.setItem('dao_user_treasury', newBal);
 
       fireSuccessConfetti();
-      addToast(
-        'success',
-        'Proposal Executed!',
-        `Contract automatically transferred ${targetProp.amount} ETH to ${targetProp.recipient.slice(0, 6)}...`
-      );
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
-
-      addToast('loading', 'Executing Payout', 'Smart contract verifying quorum & executing fund transfer...');
-      const tx = await contract.executeProposal(proposalId);
-      await tx.wait();
-
-      fireSuccessConfetti();
-      await loadContractData(provider, account, chainId);
-      addToast(
-        'success',
-        'Funds Released!',
-        `Proposal #${proposalId} finalized and ${targetProp.amount} ETH transferred!`
-      );
-    } catch (err) {
-      console.error(err);
-      addToast('error', 'Execution Failed', err.reason || err.message);
-    } finally {
-      setIsLoading(false);
+      addToast('success', 'Proposal Executed!', `Contract automatically transferred ${targetProp.amount} ETH to proposer!`);
     }
   };
 
-  // Fast-Forward Voting Deadline (Demo Simulator Feature)
+  // Action: Join Club (Non-Members)
+  const handleJoinClub = async () => {
+    if (!account) {
+      connectWallet();
+      return;
+    }
+    if (isContractDeployed && !isDemoMode) {
+      try {
+        setIsLoading(true);
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
+
+        addToast('loading', 'Joining Club', 'Calling joinClub() on smart contract...');
+        const tx = await contract.joinClub();
+        await tx.wait();
+
+        await loadAppState(provider, account, chainId);
+        addToast('success', 'Welcome!', 'You are now an on-chain DAO member!');
+      } catch (err) {
+        console.error(err);
+        addToast('error', 'Join Failed', err.reason || err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
+      if (!members.includes(account)) {
+        const updated = [...members, account];
+        setMembers(updated);
+        localStorage.setItem('dao_user_members', JSON.stringify(updated));
+      }
+      setIsMember(true);
+      addToast('success', 'Welcome!', 'You are now a registered voting member!');
+    }
+  };
+
+  // Fast-Forward voting deadline helper
   const handleFastForward = (proposalId) => {
-    setProposals((prev) =>
-      prev.map((p) =>
-        p.id === proposalId
-          ? { ...p, votingDeadline: Math.floor(Date.now() / 1000) - 10 }
-          : p
-      )
+    const updated = proposals.map((p) =>
+      p.id === proposalId ? { ...p, votingDeadline: Math.floor(Date.now() / 1000) - 10 } : p
     );
-    addToast('info', 'Time Travel Applied', 'Voting deadline passed! Proposal is now ready for execution review.');
-  };
-
-  // Add Member by Admin
-  const handleAddMember = async (e) => {
-    e.preventDefault();
-    if (!newMemberAddress || !ethers.isAddress(newMemberAddress)) {
-      addToast('error', 'Invalid Address', 'Please provide a valid Ethereum wallet address.');
-      return;
+    setProposals(updated);
+    if (!isContractDeployed) {
+      localStorage.setItem('dao_user_proposals', JSON.stringify(updated));
     }
-
-    if (isDemoMode) {
-      if (members.includes(newMemberAddress)) {
-        addToast('info', 'Already Member', 'Address is already in the club directory.');
-        return;
-      }
-      setMembers((prev) => [...prev, newMemberAddress]);
-      setNewMemberAddress('');
-      addToast('success', 'Member Added', 'Successfully registered new member in the club.');
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      const provider = new ethers.BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const contract = new ethers.Contract(contractAddress, contractArtifact.abi, signer);
-
-      addToast('loading', 'Adding Member', 'Registering address on-chain...');
-      const tx = await contract.addMember(newMemberAddress);
-      await tx.wait();
-
-      setNewMemberAddress('');
-      await loadContractData(provider, account, chainId);
-      addToast('success', 'Member Registered', 'New member added to the smart contract.');
-    } catch (err) {
-      console.error(err);
-      addToast('error', 'Add Member Failed', err.reason || err.message);
-    } finally {
-      setIsLoading(false);
-    }
+    addToast('info', 'Time Travel Applied', 'Voting deadline passed! Proposal is now ready for execution.');
   };
 
   // Switch Network Helper
@@ -614,9 +734,22 @@ export default function App() {
       });
     } catch (switchError) {
       if (switchError.code === 4902) {
-        addToast('info', 'Network Not Added', 'Please add Sepolia network to MetaMask first.');
+        addToast('info', 'Add Network', 'Please add Sepolia to MetaMask first.');
       }
     }
+  };
+
+  // Format Duration Remaining
+  const formatCountdown = (deadline) => {
+    const diff = deadline - currentTime;
+    if (diff <= 0) return 'Voting Ended';
+    const d = Math.floor(diff / 86400);
+    const h = Math.floor((diff % 86400) / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    const s = diff % 60;
+    if (d > 0) return `${d}d ${h}h remaining`;
+    if (h > 0) return `${h}h ${m}m remaining`;
+    return `${m}m ${s}s remaining`;
   };
 
   // Filtered Proposals
@@ -637,24 +770,13 @@ export default function App() {
     });
   }, [proposals, statusFilter, searchQuery, currentTime]);
 
-  // Format Duration Remaining
-  const formatCountdown = (deadline) => {
-    const diff = deadline - currentTime;
-    if (diff <= 0) return 'Voting Ended';
-    const d = Math.floor(diff / 86400);
-    const h = Math.floor((diff % 86400) / 3600);
-    const m = Math.floor((diff % 3600) / 60);
-    const s = diff % 60;
-    if (d > 0) return `${d}d ${h}h remaining`;
-    if (h > 0) return `${h}h ${m}m remaining`;
-    return `${m}m ${s}s remaining`;
-  };
-
-  // Copy to Clipboard Helper
   const copyAddress = (addr) => {
     navigator.clipboard.writeText(addr);
-    addToast('info', 'Address Copied', `${addr.slice(0, 8)}... copied to clipboard`);
+    addToast('info', 'Copied', `${addr.slice(0, 8)}... copied to clipboard`);
   };
+
+  // Quorum calculations
+  const requiredVotes = Math.ceil((Math.max(members.length, 1) * quorumPct) / 100);
 
   return (
     <div className="app-container">
@@ -673,19 +795,18 @@ export default function App() {
 
           <div className="nav-actions">
             {/* Mode Switcher */}
-            <div className="mode-toggle" title="Toggle between real MetaMask Web3 and interactive Simulator">
+            <div className="mode-toggle">
               <div
                 className={`mode-toggle-option ${!isDemoMode ? 'active' : ''}`}
                 onClick={() => {
-                  setIsDemoMode(false);
-                  connectWallet();
+                  if (isDemoMode) toggleDemoMode();
                 }}
               >
-                Web3 On-Chain
+                Web3 Active
               </div>
               <div
                 className={`mode-toggle-option ${isDemoMode ? 'active' : ''}`}
-                onClick={() => setIsDemoMode(true)}
+                onClick={toggleDemoMode}
               >
                 <Sparkles size={12} style={{ display: 'inline', marginRight: 4 }} />
                 Simulator Demo
@@ -701,10 +822,9 @@ export default function App() {
                   }`}
                 ></span>
                 <span>
-                  {SUPPORTED_NETWORKS[chainId]?.name ||
-                    (chainId ? `Chain ID: ${chainId}` : 'Network Unknown')}
+                  {SUPPORTED_NETWORKS[chainId]?.name || (chainId ? `Chain ID: ${chainId}` : 'Not Connected')}
                 </span>
-                {chainId !== 11155111 && chainId !== 31337 && (
+                {chainId && chainId !== 11155111 && chainId !== 31337 && (
                   <button
                     className="btn btn-sm btn-outline"
                     style={{ padding: '0.15rem 0.45rem', fontSize: '0.7rem' }}
@@ -726,28 +846,43 @@ export default function App() {
               <span>Rules</span>
             </button>
 
-            {/* Wallet Button */}
+            {/* Real Connected Wallet Display */}
             {account ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <div
-                  className="address-pill"
-                  style={{ cursor: 'pointer', padding: '0.45rem 0.85rem' }}
-                  onClick={() => copyAddress(account)}
-                  title="Click to copy address"
-                >
-                  <Wallet size={14} color="#a78bfa" />
-                  <span>
-                    {account.slice(0, 6)}...{account.slice(-4)}
+              <div
+                className="address-pill"
+                style={{ cursor: 'pointer', padding: '0.45rem 0.85rem' }}
+                onClick={() => copyAddress(account)}
+                title="Click to copy your address"
+              >
+                <Wallet size={14} color="#a78bfa" />
+                <span style={{ fontWeight: 600 }}>
+                  {account.slice(0, 6)}...{account.slice(-4)}
+                </span>
+                <span style={{ color: '#10b981', fontWeight: 600, marginLeft: 6 }}>
+                  {accountBalance} ETH
+                </span>
+                {isAdmin && (
+                  <span
+                    style={{
+                      background: 'rgba(245, 158, 11, 0.2)',
+                      color: '#fbbf24',
+                      padding: '0.1rem 0.4rem',
+                      borderRadius: '4px',
+                      fontSize: '0.7rem',
+                      marginLeft: 4,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 2,
+                    }}
+                  >
+                    <Crown size={10} /> Admin
                   </span>
-                  <span style={{ color: '#10b981', fontWeight: 600, marginLeft: 4 }}>
-                    {accountBalance} ETH
-                  </span>
-                </div>
+                )}
               </div>
             ) : (
               <button className="btn btn-primary" onClick={connectWallet}>
                 <Wallet size={16} />
-                <span>Connect Wallet</span>
+                <span>Connect MetaMask</span>
               </button>
             )}
           </div>
@@ -766,6 +901,37 @@ export default function App() {
               </div>
               <h1 className="hero-title">{clubName}</h1>
               <p className="hero-desc">{clubDescription}</p>
+
+              {/* Deployment Status Pill */}
+              <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                {isContractDeployed ? (
+                  <div
+                    style={{
+                      fontSize: '0.775rem',
+                      color: '#34d399',
+                      background: 'rgba(16, 185, 129, 0.12)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                      padding: '0.25rem 0.65rem',
+                      borderRadius: 'var(--radius-full)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <CheckCircle2 size={13} />
+                    <span>Live Smart Contract: {contractAddress.slice(0, 6)}...{contractAddress.slice(-4)}</span>
+                  </div>
+                ) : (
+                  <button
+                    className="btn btn-sm btn-outline"
+                    style={{ borderStyle: 'dashed', borderColor: '#8b5cf6', color: '#c4b5fd' }}
+                    onClick={() => setShowDeployModal(true)}
+                  >
+                    <Rocket size={13} color="#a78bfa" />
+                    <span>Deploy DAO Smart Contract to Sepolia</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="hero-actions">
@@ -780,21 +946,26 @@ export default function App() {
             </div>
           </div>
 
-          {/* Membership Notification Bar */}
+          {/* Membership Status Bar */}
           <div className="member-banner">
             <div className="member-banner-left">
               <div className="member-avatar">
-                {account ? account.slice(2, 4).toUpperCase() : '??'}
+                {isAdmin ? <Crown size={18} color="#fbbf24" /> : account ? account.slice(2, 4).toUpperCase() : '??'}
               </div>
               <div className="member-info">
                 <h4>
-                  {isMember ? 'Registered Club Voting Member' : 'Guest / Non-Member Status'}
-                  {isAdmin && ' (Deployer Admin)'}
+                  {isAdmin
+                    ? '👑 Club Admin (Deployer / President)'
+                    : isMember
+                    ? 'Registered Club Voting Member'
+                    : 'Guest / Non-Member'}
                 </h4>
                 <p>
-                  {isMember
+                  {isAdmin
+                    ? 'You are the Club Admin. You have full control to manually add club members by wallet address below.'
+                    : isMember
                     ? 'You hold 1-member-1-vote democratic power to propose and vote.'
-                    : 'Join the club to participate in proposal voting and fund allocations.'}
+                    : 'Connect your wallet or join to participate in democratic treasury spending.'}
                 </p>
               </div>
             </div>
@@ -807,11 +978,131 @@ export default function App() {
             ) : (
               <button className="btn btn-outline btn-sm" onClick={() => setShowMembersModal(true)}>
                 <Users size={14} />
-                <span>View All Members ({members.length})</span>
+                <span>View Directory ({members.length})</span>
               </button>
             )}
           </div>
         </section>
+
+        {/* ADMIN CONTROLS: MANUALLY ADD MEMBERS */}
+        {isAdmin && (
+          <section
+            style={{
+              background: 'linear-gradient(135deg, rgba(30, 27, 75, 0.6) 0%, rgba(15, 23, 42, 0.7) 100%)',
+              border: '1px solid rgba(139, 92, 246, 0.35)',
+              borderRadius: 'var(--radius-xl)',
+              padding: '1.75rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1.25rem',
+              boxShadow: 'var(--shadow-md)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 'var(--radius-md)',
+                    background: 'rgba(245, 158, 11, 0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fbbf24',
+                  }}
+                >
+                  <Crown size={20} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#fff' }}>
+                    Admin Controls — Add & Manage Club Members
+                  </h3>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Add trusted members using their wallet address. Only added members get 1-member-1-vote rights.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  fontSize: '0.8rem',
+                  color: 'var(--accent-cyan)',
+                  background: 'rgba(6, 182, 212, 0.1)',
+                  padding: '0.35rem 0.85rem',
+                  borderRadius: 'var(--radius-full)',
+                  border: '1px solid rgba(6, 182, 212, 0.25)',
+                }}
+              >
+                <strong>{members.length}</strong> Registered {members.length === 1 ? 'Member' : 'Members'} (Quorum: {requiredVotes} votes needed)
+              </div>
+            </div>
+
+            {/* Quick Add Member Form */}
+            <form onSubmit={handleAddMember} style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: '280px' }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Paste member wallet address (e.g. 0x3C44CdDdB6a900fa2b585dd299e...)"
+                  value={newMemberAddress}
+                  onChange={(e) => setNewMemberAddress(e.target.value)}
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
+                  required
+                />
+              </div>
+              <button type="submit" className="btn btn-primary" disabled={isLoading}>
+                <UserPlus size={16} />
+                <span>+ Add Member</span>
+              </button>
+            </form>
+
+            {/* Added Members List preview */}
+            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+              {members.map((m, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    background: 'var(--bg-tertiary)',
+                    border: '1px solid var(--border-subtle)',
+                    padding: '0.35rem 0.75rem',
+                    borderRadius: 'var(--radius-md)',
+                    fontSize: '0.775rem',
+                  }}
+                >
+                  <span style={{ fontFamily: 'var(--font-mono)', color: '#cbd5e1' }}>
+                    {m.slice(0, 6)}...{m.slice(-4)}
+                  </span>
+                  {adminAddress && m.toLowerCase() === adminAddress.toLowerCase() ? (
+                    <span style={{ color: '#fbbf24', fontWeight: 600, fontSize: '0.7rem' }}>
+                      (Admin)
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveMember(m)}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-dim)',
+                        cursor: 'pointer',
+                        padding: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                      }}
+                      title="Remove member"
+                    >
+                      <Trash2 size={12} color="#fb7185" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Treasury Stats Grid */}
         <section className="stats-grid">
@@ -825,7 +1116,9 @@ export default function App() {
             <div className="stat-value">{treasuryBalance} ETH</div>
             <div className="stat-footer">
               <span>≈ ${(parseFloat(treasuryBalance) * 2650).toLocaleString()} USD</span>
-              <span style={{ color: '#10b981', marginLeft: 'auto' }}>Audited On-Chain</span>
+              <span style={{ color: '#10b981', marginLeft: 'auto' }}>
+                {isContractDeployed ? 'On-Chain' : 'Local Pool'}
+              </span>
             </div>
           </div>
 
@@ -844,7 +1137,7 @@ export default function App() {
 
           <div className="stat-card">
             <div className="stat-header">
-              <span>Proposals Tracked</span>
+              <span>Proposals</span>
               <div className="stat-icon green">
                 <Vote size={18} />
               </div>
@@ -852,8 +1145,7 @@ export default function App() {
             <div className="stat-value">{proposals.length}</div>
             <div className="stat-footer">
               <span>
-                {proposals.filter((p) => getProposalComputedStatus(p) === 'Active').length} Active
-                Voting Now
+                {proposals.filter((p) => getProposalComputedStatus(p) === 'Active').length} Active Voting
               </span>
             </div>
           </div>
@@ -867,7 +1159,7 @@ export default function App() {
             </div>
             <div className="stat-value">{quorumPct}%</div>
             <div className="stat-footer">
-              <span>Min. {Math.ceil((members.length * quorumPct) / 100)} votes to pass</span>
+              <span>Min. {requiredVotes} votes to pass</span>
             </div>
           </div>
         </section>
@@ -875,7 +1167,7 @@ export default function App() {
         {/* Proposal Controls & Filter Tabs */}
         <div className="section-header">
           <div className="section-title">
-            <h2>Club Spending Proposals</h2>
+            <h2>Spending Proposals</h2>
             <span className="count-pill">{filteredProposals.length}</span>
           </div>
 
@@ -917,11 +1209,11 @@ export default function App() {
             <div className="empty-icon">
               <Vote size={28} />
             </div>
-            <h3 className="empty-title">No proposals found</h3>
+            <h3 className="empty-title">No proposals yet</h3>
             <p className="empty-desc">
               {searchQuery
                 ? 'Try adjusting your search criteria.'
-                : 'No proposals currently match this status filter. Submit a proposal to kickstart voting!'}
+                : 'No proposals currently match this status filter. Submit a proposal to start democratic voting!'}
             </p>
             <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
               <PlusCircle size={16} />
@@ -932,8 +1224,7 @@ export default function App() {
           <div className="proposals-grid">
             {filteredProposals.map((p) => {
               const status = getProposalComputedStatus(p);
-              const isProposer = p.proposer.toLowerCase() === account.toLowerCase();
-              const requiredVotes = Math.ceil((Math.max(members.length, 1) * quorumPct) / 100);
+              const isProposer = account && p.proposer.toLowerCase() === account.toLowerCase();
               const totalVotes = p.votesFor + p.votesAgainst;
               const quorumMet = totalVotes >= requiredVotes;
 
@@ -1072,18 +1363,16 @@ export default function App() {
                           </div>
                         )}
 
-                        {/* Demo Fast Forward Button */}
-                        {isDemoMode && (
-                          <button
-                            className="btn btn-outline btn-sm"
-                            style={{ fontSize: '0.725rem' }}
-                            onClick={() => handleFastForward(p.id)}
-                            title="Simulate voting deadline passing immediately"
-                          >
-                            <FastForward size={12} />
-                            <span>Fast-Forward Voting Deadline (Demo)</span>
-                          </button>
-                        )}
+                        {/* Fast Forward for testing */}
+                        <button
+                          className="btn btn-outline btn-sm"
+                          style={{ fontSize: '0.725rem' }}
+                          onClick={() => handleFastForward(p.id)}
+                          title="Simulate voting deadline passing immediately"
+                        >
+                          <FastForward size={12} />
+                          <span>Fast-Forward Voting Deadline (Testing)</span>
+                        </button>
                       </>
                     )}
 
@@ -1119,7 +1408,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Architecture & Verification Panel */}
+        {/* Security & Rules Card */}
         <div className="info-box">
           <div className="info-title">
             <ShieldCheck size={18} color="#8b5cf6" />
@@ -1129,29 +1418,25 @@ export default function App() {
             <div className="info-item">
               <h5>1 Member = 1 Vote Democracy</h5>
               <p>
-                Every registered club member receives exactly one vote. Double voting is strictly
-                prevented on-chain via immutable hash mappings.
+                Every registered club member receives exactly one vote. Double voting is strictly prevented.
               </p>
             </div>
             <div className="info-item">
               <h5>30% Quorum & Simple Majority</h5>
               <p>
-                A proposal requires at least 30% member participation and strictly more FOR than
-                AGAINST votes. Unpopular or unreviewed proposals cannot execute.
+                A proposal requires at least 30% member participation and strictly more FOR than AGAINST votes.
               </p>
             </div>
             <div className="info-item">
               <h5>Direct Smart-Contract Transfers</h5>
               <p>
-                No admin, president, or treasurer can touch or divert treasury funds. Execution
-                automatically sends the exact requested amount directly to the proposer.
+                No officer or treasurer can move funds directly. Execution releases money automatically to the proposer.
               </p>
             </div>
             <div className="info-item">
-              <h5>Reentrancy & Balance Checks</h5>
+              <h5>Safety Checks</h5>
               <p>
-                Proposals cannot exceed treasury balance, cannot be executed twice, and are protected
-                by ReentrancyGuard and Checks-Effects-Interactions.
+                Amount cannot exceed treasury balance, proposals can execute only once, and failed proposals never move funds.
               </p>
             </div>
           </div>
@@ -1162,8 +1447,7 @@ export default function App() {
       <footer className="footer">
         <div className="footer-inner">
           <div>
-            <strong>ClubDAO Treasury</strong> • Transparent Fund Allocation for Clubs & Student
-            Communities
+            <strong>ClubDAO Treasury</strong> • Transparent Fund Allocation for Clubs & Communities
           </div>
           <div className="footer-links">
             <a href="#" onClick={(e) => { e.preventDefault(); setShowGuideModal(true); }}>
@@ -1172,16 +1456,87 @@ export default function App() {
             <a href="#" onClick={(e) => { e.preventDefault(); setShowMembersModal(true); }}>
               Member Registry
             </a>
-            <a
-              href="https://sepolia.etherscan.io"
-              target="_blank"
-              rel="noreferrer"
-            >
+            <a href="https://sepolia.etherscan.io" target="_blank" rel="noreferrer">
               Sepolia Explorer <ExternalLink size={12} style={{ display: 'inline' }} />
             </a>
           </div>
         </div>
       </footer>
+
+      {/* MODAL: DEPLOY SMART CONTRACT TO SEPOLIA */}
+      {showDeployModal && (
+        <div className="modal-overlay" onClick={() => setShowDeployModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">🚀 Deploy DAO Smart Contract</h3>
+              <button className="modal-close-btn" onClick={() => setShowDeployModal(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleDeployContract}>
+              <div className="modal-body">
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                  Deploy your club's own <code>ClubTreasuryDAO.sol</code> smart contract using your connected MetaMask wallet.
+                  Your wallet will automatically be the immutable <strong>Admin</strong> on-chain!
+                </p>
+
+                <div className="form-group">
+                  <label className="form-label">Club Name</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={deployForm.clubName}
+                    onChange={(e) => setDeployForm({ ...deployForm, clubName: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Club Purpose / Description</label>
+                  <textarea
+                    className="form-textarea"
+                    value={deployForm.clubDescription}
+                    onChange={(e) => setDeployForm({ ...deployForm, clubDescription: e.target.value })}
+                    required
+                  ></textarea>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Initial Treasury Funding (ETH)</label>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    className="form-input"
+                    value={deployForm.initialFunding}
+                    onChange={(e) => setDeployForm({ ...deployForm, initialFunding: e.target.value })}
+                    required
+                  />
+                  <span className="form-hint">Seed your treasury with test ETH during deployment (e.g. 0.01 ETH).</span>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Quorum Percentage</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    className="form-input"
+                    value={deployForm.quorumPct}
+                    onChange={(e) => setDeployForm({ ...deployForm, quorumPct: Number(e.target.value) })}
+                    required
+                  />
+                </div>
+
+                <button type="submit" className="btn btn-primary btn-lg" disabled={isLoading}>
+                  <Rocket size={18} />
+                  <span>Deploy to Blockchain Now</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* CREATE PROPOSAL MODAL */}
       {showCreateModal && (
@@ -1200,7 +1555,7 @@ export default function App() {
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="e.g. Hackathon Catering & Swag"
+                    placeholder="e.g. Hackathon Catering & Refreshments"
                     value={proposalForm.title}
                     onChange={(e) => setProposalForm({ ...proposalForm, title: e.target.value })}
                     required
@@ -1213,9 +1568,7 @@ export default function App() {
                     className="form-textarea"
                     placeholder="Describe how the requested funds will be utilized for the club..."
                     value={proposalForm.description}
-                    onChange={(e) =>
-                      setProposalForm({ ...proposalForm, description: e.target.value })
-                    }
+                    onChange={(e) => setProposalForm({ ...proposalForm, description: e.target.value })}
                     required
                   ></textarea>
                 </div>
@@ -1223,15 +1576,14 @@ export default function App() {
                 <div className="form-group">
                   <label className="form-label">
                     <span>Requested Amount (ETH)</span>
-                    <span className="form-hint">Max Available: {treasuryBalance} ETH</span>
+                    <span className="form-hint">Treasury Balance: {treasuryBalance} ETH</span>
                   </label>
                   <input
                     type="number"
                     step="0.01"
                     min="0.01"
-                    max={treasuryBalance}
                     className="form-input"
-                    placeholder="e.g. 0.75"
+                    placeholder="e.g. 0.25"
                     value={proposalForm.amount}
                     onChange={(e) => setProposalForm({ ...proposalForm, amount: e.target.value })}
                     required
@@ -1243,12 +1595,7 @@ export default function App() {
                   <select
                     className="form-select"
                     value={proposalForm.durationSeconds}
-                    onChange={(e) =>
-                      setProposalForm({
-                        ...proposalForm,
-                        durationSeconds: Number(e.target.value),
-                      })
-                    }
+                    onChange={(e) => setProposalForm({ ...proposalForm, durationSeconds: Number(e.target.value) })}
                   >
                     <option value={120}>2 Minutes (Quick Demo / Testing)</option>
                     <option value={3600}>1 Hour</option>
@@ -1256,20 +1603,6 @@ export default function App() {
                     <option value={259200}>3 Days</option>
                     <option value={604800}>7 Days</option>
                   </select>
-                </div>
-
-                <div
-                  style={{
-                    background: 'rgba(139, 92, 246, 0.1)',
-                    border: '1px solid rgba(139, 92, 246, 0.25)',
-                    padding: '0.75rem',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: '0.8rem',
-                    color: '#c4b5fd',
-                  }}
-                >
-                  <Info size={14} style={{ display: 'inline', marginRight: 4 }} />
-                  Once passed, funds will be released automatically to your connected address.
                 </div>
 
                 <button type="submit" className="btn btn-primary btn-lg" disabled={isLoading}>
@@ -1296,7 +1629,7 @@ export default function App() {
               <div className="modal-body">
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
                   Anyone can fund the club treasury with test ETH. All deposits are held transparently
-                  by the smart contract and can only be withdrawn via approved member proposals.
+                  and can only be withdrawn via approved member proposals.
                 </p>
 
                 <div className="form-group">
@@ -1312,7 +1645,6 @@ export default function App() {
                   />
                 </div>
 
-                {/* Quick Presets */}
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   {['0.1', '0.5', '1.0', '2.5'].map((amt) => (
                     <button
@@ -1329,7 +1661,7 @@ export default function App() {
 
                 <button type="submit" className="btn btn-success btn-lg" disabled={isLoading}>
                   <Coins size={18} />
-                  <span>Send Deposit Transaction</span>
+                  <span>Send Deposit</span>
                 </button>
               </div>
             </form>
@@ -1348,13 +1680,9 @@ export default function App() {
               </button>
             </div>
             <div className="modal-body">
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                Registered members have equal voting weight in the club treasury.
-              </p>
-
               <div
                 style={{
-                  maxHeight: '260px',
+                  maxHeight: '280px',
                   overflowY: 'auto',
                   display: 'flex',
                   flexDirection: 'column',
@@ -1382,17 +1710,17 @@ export default function App() {
                       <span style={{ fontFamily: 'var(--font-mono)' }}>
                         {m.slice(0, 10)}...{m.slice(-8)}
                       </span>
-                      {account && m.toLowerCase() === account.toLowerCase() && (
+                      {adminAddress && m.toLowerCase() === adminAddress.toLowerCase() && (
                         <span
                           style={{
                             fontSize: '0.7rem',
-                            background: 'var(--accent-glow)',
-                            color: 'var(--accent-primary)',
+                            background: 'rgba(245, 158, 11, 0.2)',
+                            color: '#fbbf24',
                             padding: '0.1rem 0.4rem',
                             borderRadius: '4px',
                           }}
                         >
-                          You
+                          Admin
                         </span>
                       )}
                     </div>
@@ -1406,37 +1734,12 @@ export default function App() {
                   </div>
                 ))}
               </div>
-
-              {/* Admin Onboard Tool */}
-              <div
-                style={{
-                  borderTop: '1px solid var(--border-subtle)',
-                  paddingTop: '1rem',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.5rem',
-                }}
-              >
-                <h4 style={{ fontSize: '0.9rem', color: '#fff' }}>Add New Member Address</h4>
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="0x..."
-                    value={newMemberAddress}
-                    onChange={(e) => setNewMemberAddress(e.target.value)}
-                  />
-                  <button className="btn btn-primary" onClick={handleAddMember} disabled={isLoading}>
-                    Add
-                  </button>
-                </div>
-              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* DAO GUIDE / RULES MODAL */}
+      {/* DAO GUIDE MODAL */}
       {showGuideModal && (
         <div className="modal-overlay" onClick={() => setShowGuideModal(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
@@ -1459,8 +1762,7 @@ export default function App() {
                   1. Transparent Membership
                 </h4>
                 <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
-                  Anyone in the community can register as a member with the "Join Club" function. Each
-                  registered wallet holds exactly 1 vote.
+                  The deployer/admin onboards members using their wallet address. Each member has equal voting weight.
                 </p>
               </div>
 
@@ -1476,8 +1778,7 @@ export default function App() {
                   2. 30% Quorum & Simple Majority
                 </h4>
                 <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
-                  To pass, a proposal must receive participation from at least 30% of all registered
-                  club members. Among votes cast, FOR votes must strictly exceed AGAINST votes.
+                  At least 30% of registered members must vote, and FOR votes must strictly exceed AGAINST votes to pass.
                 </p>
               </div>
 
@@ -1490,30 +1791,10 @@ export default function App() {
                 }}
               >
                 <h4 style={{ color: '#10b981', marginBottom: '0.3rem', fontSize: '0.95rem' }}>
-                  3. Automated Payouts Without Middlemen
+                  3. Automated Payouts
                 </h4>
                 <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
-                  Once the voting deadline ends and criteria are satisfied, clicking "Execute"
-                  triggers an atomic on-chain transfer of the exact requested ETH to the proposer. No
-                  president or treasurer can block or divert the payout.
-                </p>
-              </div>
-
-              <div
-                style={{
-                  background: 'var(--bg-tertiary)',
-                  padding: '1rem',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border-subtle)',
-                }}
-              >
-                <h4 style={{ color: '#f43f5e', marginBottom: '0.3rem', fontSize: '0.95rem' }}>
-                  4. Security Checks
-                </h4>
-                <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
-                  Proposers cannot vote on their own proposals (fairness safeguard). Proposals cannot
-                  be executed twice. If a proposal fails or expires without meeting quorum, zero funds
-                  can be moved.
+                  Once the voting deadline passes and criteria are met, "Execute" triggers an atomic transfer of the exact requested ETH directly to the proposer.
                 </p>
               </div>
             </div>
